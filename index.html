@@ -808,6 +808,7 @@ function srim(equityEok, roePct, rrPct, shares) {
     sell: (B0 + RI / r) / shares, // 초과이익 지속
     fair: V(0.9) / shares,        // 10%씩 감소
     buy: V(0.8) / shares,         // 20%씩 감소
+    bps: B0 / shares,             // 주당 자기자본 (역전 시 기준선)
     negative: roe < r
   };
 }
@@ -897,15 +898,17 @@ function el(tag, attrs, text) {
 function renderGauge(bands, price) {
   const svg = $('gauge'); svg.innerHTML = '';
   const W = 700, X0 = 40, X1 = 660, Y = 110;
-  const vals = [bands.buy, bands.fair, bands.sell, price].filter(v => v != null && isFinite(v));
+  const inverted = !!bands.negative;
+  const vals = (inverted ? [bands.bps, price] : [bands.buy, bands.fair, bands.sell, price])
+    .filter(v => v != null && isFinite(v));
   if (!vals.length) return;
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const pad = (hi - lo) * 0.12 || hi * 0.1; lo -= pad; hi += pad; if (lo < 0) lo = 0;
   const X = v => X0 + (v - lo) / (hi - lo) * (X1 - X0);
   const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-  // 구간 배경
+  // 구간 배경 (정상 밴드일 때만)
   const zone = (a, b, color) => svg.appendChild(el('rect', { x: X(a), y: Y - 16, width: Math.max(0, X(b) - X(a)), height: 32, fill: color, opacity: 0.5 }));
-  if (bands.buy < bands.sell) {
+  if (!inverted && bands.buy < bands.sell) {
     zone(lo, bands.buy, css('--buy-tint'));
     zone(bands.buy, bands.sell, css('--fair-tint'));
     zone(bands.sell, hi, css('--sell-tint'));
@@ -925,9 +928,13 @@ function renderGauge(bands, price) {
     svg.appendChild(el('line', { x1: x, y1: Y - 26, x2: x, y2: Y + 14, stroke: color, 'stroke-width': 2.5 }));
     svg.appendChild(el('text', { x, y: Y - 32 - dy, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 700, 'font-family': 'IBM Plex Sans KR', fill: color }, label));
   };
-  marker(bands.buy, css('--buy'), '매수 ' + fmtN(Math.round(bands.buy)), 0);
-  marker(bands.fair, css('--fair'), '적정 ' + fmtN(Math.round(bands.fair)), 18);
-  marker(bands.sell, css('--sell'), '매도 ' + fmtN(Math.round(bands.sell)), 0);
+  if (inverted) {
+    marker(bands.bps, css('--fair'), 'BPS ' + fmtN(Math.round(bands.bps)), 0);
+  } else {
+    marker(bands.buy, css('--buy'), '매수 ' + fmtN(Math.round(bands.buy)), 0);
+    marker(bands.fair, css('--fair'), '적정 ' + fmtN(Math.round(bands.fair)), 18);
+    marker(bands.sell, css('--sell'), '매도 ' + fmtN(Math.round(bands.sell)), 0);
+  }
   // 현재가 바늘
   if (price != null) {
     const x = X(price);
@@ -955,22 +962,30 @@ function recalcAll() {
   if (s.equity != null && s.roe != null && s.rr != null && s.shares) {
     bands = srim(s.equity, s.roe, s.rr, s.shares);
     renderGauge(bands, s.price);
-    $('lgBuy').textContent = fmtW(bands.buy);
-    $('lgFair').textContent = fmtW(bands.fair);
-    $('lgSell').textContent = fmtW(bands.sell);
     if (bands.negative) {
-      warn.textContent = '⚠ 예상 ROE(' + s.roe + '%)가 요구수익률(' + s.rr + '%)보다 낮아 초과이익이 음수입니다. 이 경우 S-RIM 가치는 자기자본 이하로 계산되며, 밴드 해석에 주의가 필요합니다.';
+      $('lgBuy').textContent = $('lgFair').textContent = $('lgSell').textContent = '무효(역전)';
+      const pbr = s.price != null ? (s.price / bands.bps).toFixed(2) : '—';
+      warn.textContent = '⚠ 해석 안내: 예상 ROE(' + s.roe + '%)가 요구수익률(' + s.rr + '%)에 미달해 초과이익이 음수입니다. '
+        + '이때는 세 시나리오의 의미가 뒤집혀(손실의 "빠른 소멸"이 오히려 낙관) 매수가>매도가 역전이 일어나므로, 매수/적정/매도 라벨은 판단 근거로 쓸 수 없습니다. '
+        + '흑자 여부와는 별개로 "자본 대비 수익률이 기회비용에 못 미치는 저수익성 상태"라는 뜻입니다. '
+        + '이런 종목은 자산가치 관점으로 읽는 것이 정확합니다 — 주당 자기자본(BPS) ' + fmtW(bands.bps) + ', 현재 PBR 약 ' + pbr + '배. '
+        + 'PBR이 낮을수록 자산은 싸지만, 수익성 개선(ROE 회복) 근거가 확인되기 전까지는 전형적인 저ROE·저PBR 구간입니다.';
       warn.classList.add('show');
+      $('verdictBox').innerHTML = '<span class="verdict hold">판정 유보 — 초과이익 음수 (밴드 무효 · 자산가치 관점 참고)</span>';
+    } else {
+      $('lgBuy').textContent = fmtW(bands.buy);
+      $('lgFair').textContent = fmtW(bands.fair);
+      $('lgSell').textContent = fmtW(bands.sell);
+      // 판정
+      let v = '', cls = '';
+      if (s.price != null) {
+        if (s.price <= bands.buy) { v = '저평가 — 매수가 이하'; cls = 'buy'; }
+        else if (s.price >= bands.sell) { v = '고평가 — 매도가 이상'; cls = 'sell'; }
+        else if (s.price <= bands.fair) { v = '적정 하단 — 관심 구간'; cls = 'buy'; }
+        else { v = '적정 상단 — 중립'; cls = 'hold'; }
+      }
+      $('verdictBox').innerHTML = v ? '<span class="verdict ' + cls + '">' + v + '</span>' : '';
     }
-    // 판정
-    let v = '', cls = '';
-    if (s.price != null) {
-      if (s.price <= bands.buy) { v = '저평가 — 매수가 이하'; cls = 'buy'; }
-      else if (s.price >= bands.sell) { v = '고평가 — 매도가 이상'; cls = 'sell'; }
-      else if (s.price <= bands.fair) { v = '적정 하단 — 관심 구간'; cls = 'buy'; }
-      else { v = '적정 상단 — 중립'; cls = 'hold'; }
-    }
-    $('verdictBox').innerHTML = v ? '<span class="verdict ' + cls + '">' + v + '</span>' : '';
   } else {
     $('verdictBox').innerHTML = '<span class="hint">S-RIM 입력값(지배주주지분·ROE·요구수익률·주식수)을 채우면 밴드가 계산됩니다.</span>';
     $('gauge').innerHTML = '';
@@ -1010,9 +1025,9 @@ function recalcAll() {
     mt.appendChild(tr);
   });
 
-  // 사분면: x = 가치(적정가 대비 괴리율), y = 모멘텀
-  if (bands && s.price != null && bands.fair > 0) {
-    const gap = bands.fair / s.price - 1; // +면 저평가
+  // 사분면: x = 가치(정상: 적정가 대비, 역전: BPS 대비 괴리율), y = 모멘텀
+  if (bands && s.price != null && (bands.fair > 0 || bands.bps > 0)) {
+    const gap = bands.negative ? (bands.bps / s.price - 1) : (bands.fair / s.price - 1); // +면 저평가
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
     const xPos = 50 + clamp(gap / 0.5, -1, 1) * 45;  // ±50% 괴리를 좌우 끝으로
     const yPos = clamp(mm.score, 0, 100) * 0.9 + 5;
@@ -1032,14 +1047,18 @@ async function writeAiComment() {
   box.classList.add('loading');
   box.textContent = '감정 소견 작성 중…';
   const { s, bands, gap, fs, mm } = LAST;
+  const pbr = (s.price != null && bands.bps) ? (s.price / bands.bps).toFixed(2) : null;
   const prompt = [
-    '너는 가치투자 중심의 분석 파트너다. 투자 권유가 아닌 학습·분석 관점의 소견을 한국어 3~4문장으로 쓴다.',
-    '과장·확신 표현 금지, 수치 근거 중심, 마지막 문장에 확인해볼 리스크 or 체크포인트 1개 제시.',
+    '너는 가치투자 중심의 분석 파트너다. 투자 권유가 아닌 학습·분석 소견을 한국어 4~6문장으로 쓴다.',
+    '구성: ① S-RIM(가치) 해석 → ② F-Score(퀄리티) 해석 → ③ 모멘텀 해석 → ④ 세 축을 엮은 종합 관점과 확인해볼 체크포인트 1개. 각 축의 숫자가 무엇을 의미하는지 초보 투자자도 이해할 수 있게 풀어서 쓴다.',
+    '절대 규칙: 초과이익이 음수(ROE<요구수익률)인 경우, 매수/적정/매도 가격과 그 대비 괴리율은 무효이므로 절대 저평가율의 근거로 인용하지 마라. 대신 BPS·PBR 관점(자산은 싸지만 자본수익률이 요구수익률 미달)으로 해석하라. 회계상 흑자 여부와 초과이익의 부호는 별개 개념이다.',
+    'F-Score는 자료없음 항목 수를 감안해 "평가 가능 항목 대비 통과"로 해석하라. 과장·확신 표현 금지, 수치 근거 중심.',
     '데이터:',
     '종목 ' + ($('f_name').value || '') + ' / 현재가 ' + fmtN(s.price),
-    'S-RIM: 매수 ' + fmtN(Math.round(bands.buy)) + ' 적정 ' + fmtN(Math.round(bands.fair)) + ' 매도 ' + fmtN(Math.round(bands.sell)) + ' / 적정가 대비 괴리 ' + (gap != null ? (gap * 100).toFixed(1) + '%' : '—'),
+    '초과이익 부호: ' + (bands.negative ? '음수 (밴드 역전·무효)' : '양수 (밴드 유효)'),
+    'S-RIM: 매수 ' + fmtN(Math.round(bands.buy)) + ' 적정 ' + fmtN(Math.round(bands.fair)) + ' 매도 ' + fmtN(Math.round(bands.sell)) + ' / BPS ' + fmtN(Math.round(bands.bps)) + (pbr ? ' / PBR ' + pbr + '배' : ''),
     '적용 ROE ' + s.roe + '% vs 요구수익률 ' + s.rr + '%',
-    'F-Score ' + fs.score + '/9 (자료없음 ' + fs.naCnt + '개)',
+    'F-Score ' + fs.score + '/9 (자료없음 ' + fs.naCnt + '개 → 평가 가능 ' + (9 - fs.naCnt) + '개 중 ' + fs.score + '개 통과)',
     '모멘텀 ' + mm.score + '/100'
   ].join('\n');
   try {
