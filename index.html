@@ -282,7 +282,7 @@ footer{
 </div>
 
 <section class="card">
-  <h2>종목 조회 <span class="tag">FNGUIDE → GEMINI 2.5 FLASH</span></h2>
+  <h2>종목 조회 <span class="tag">NAVER → GEMINI 2.5 FLASH</span></h2>
   <div class="search-row">
     <input type="text" id="tickerInput" placeholder="종목코드 6자리 또는 종목명 (예: 005930, 삼성전자)">
     <button class="primary" id="btnRun">감정 시작</button>
@@ -293,7 +293,14 @@ footer{
     <div class="step" data-step="3">③ 계산·판정</div>
   </div>
   <div class="err-box" id="errBox"></div>
-  <div class="manual-link">자동 수집이 안 되는 환경이면 <a id="manualLink">수기 입력으로 진행</a>할 수 있습니다.</div>
+  <div class="manual-link">자동 수집이 안 되면 <a id="pasteLink">복붙 모드</a> 또는 <a id="manualLink">수기 입력</a>으로 진행할 수 있습니다.</div>
+</section>
+
+<section class="card" id="pasteCard" style="display:none">
+  <h2>복붙 감정 <span class="tag">자동 수집 불가 시 안전망</span></h2>
+  <p class="hint" style="margin-bottom:10px">브라우저에서 네이버 증권 또는 FnGuide의 종목 페이지를 연 뒤, 전체선택(Ctrl+A)·복사해서 아래에 붙여넣으세요. 여러 페이지(시세·재무제표 등)를 이어 붙일수록 정확해집니다. 이 모드는 종목 일치 자동검증이 불가능하므로, 결과의 회사명·현재주가를 반드시 확인하세요.</p>
+  <textarea id="pasteBox" rows="7" style="width:100%;border:1px solid var(--rule);padding:10px;font-family:var(--mono);font-size:12px;background:#fff;color:var(--ink)" placeholder="여기에 페이지 전체 텍스트 붙여넣기"></textarea>
+  <div class="recalc-row"><button class="primary" id="btnPaste">붙여넣은 텍스트로 감정</button></div>
 </section>
 
 <section class="card" id="verify">
@@ -408,14 +415,14 @@ footer{
 </div><!-- /result -->
 
 <footer>
-  본 도구는 학습·분석 보조 목적의 계산기이며 투자 조언이 아닙니다. 데이터 출처: FnGuide (comp.fnguide.com), 추출 과정에서 오류가 있을 수 있으므로 원본 확인을 권장합니다.<br>
-  진주 v1.1 · S-RIM(사경인) · Piotroski F-Score(2000) · Momentum Composite
+  본 도구는 학습·분석 보조 목적의 계산기이며 투자 조언이 아닙니다. 데이터 출처: 네이버 증권(finance.naver.com)·와이즈리포트, 추출 과정에서 오류가 있을 수 있으므로 원본 확인을 권장합니다.<br>
+  진주 v1.2 · S-RIM(사경인) · Piotroski F-Score(2000) · Momentum Composite
 </footer>
 
 </div>
 <script>
 'use strict';
-/* ═══════════ 진주 v1.1 ═══════════ */
+/* ═══════════ 진주 v1.2 ═══════════ */
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent';
@@ -534,7 +541,7 @@ function parseJsonSafe(text) {
 /* ── 추출 프롬프트 ── */
 function extractionPrompt(mainTxt, finTxt) {
   return [
-    '너는 한국 기업 재무데이터 추출기다. 아래는 FnGuide 종목 페이지에서 뽑은 표 텍스트다.',
+    '너는 한국 기업 재무데이터 추출기다. 아래는 증권 정보 페이지(네이버 증권·와이즈리포트·FnGuide 등)에서 뽑은 텍스트다.',
     '반드시 아래 스키마의 JSON만 출력하라. 설명·주석 금지. 값을 찾을 수 없으면 null.',
     '절대 규칙: 아래 본문에 없는 값을 너의 기억이나 추정으로 채우지 마라. 본문에 없으면 무조건 null이다.',
     '규칙:',
@@ -542,7 +549,7 @@ function extractionPrompt(mainTxt, finTxt) {
     '- annual: 추정(E) 표기가 없는 "확정" 연간 결산 최근 2개를 과거→최근 순서로.',
     '- consensus: (E) 표기된 추정 연도들을 순서대로. 지배주주지분 추정치가 있으면 함께.',
     '- ROE는 지배주주 기준. cfo는 영업활동으로인한현금흐름. grossProfit 없으면 매출액-매출원가.',
-    '- sharesCommon/sharesPref/treasuryShares는 주식수 그대로(억 단위 아님).',
+    '- sharesCommon/sharesPref/treasuryShares는 주식수 그대로(억 단위 아님). 상장주식수는 sharesCommon. 우선주 수가 본문에 없으면 sharesPref는 null.',
     '스키마:',
     JSON.stringify({
       company: { name: 's', code: 's', price: 0, sharesCommon: 0, sharesPref: 0, treasuryShares: 0 },
@@ -550,19 +557,80 @@ function extractionPrompt(mainTxt, finTxt) {
       annual: [{ period: '2023/12', roe: 0, controllingEquity: 0, netIncome: 0, revenue: 0, grossProfit: 0, assets: 0, currentAssets: 0, currentLiabilities: 0, nonCurrentLiabilities: 0, cfo: 0, shares: 0 }],
       consensus: [{ period: '2025/12(E)', roe: 0, controllingEquity: 0 }]
     }),
-    '── SNAPSHOT 페이지 ──', mainTxt,
-    '── 재무제표 페이지 ──', finTxt
+    '── 시세·요약 ──', mainTxt,
+    '── 재무제표 ──', finTxt
   ].join('\n');
 }
 
 /* ── 상태 ── */
-let D = null; // 추출 원본
+let D = null;     // 추출 원본
+let CHART = null; // 일봉 기반 자체 계산 모멘텀
 const FS_ROWS = [
   ['netIncome', '당기순이익'], ['assets', '자산총계'], ['cfo', '영업활동현금흐름'],
   ['nonCurrentLiabilities', '비유동부채'], ['currentAssets', '유동자산'],
   ['currentLiabilities', '유동부채'], ['revenue', '매출액'], ['grossProfit', '매출총이익'],
   ['shares', '발행주식수(주)']
 ];
+
+/* ── 일봉 차트 파싱 → 수익률·52주 자체 계산 (데이터 순도: 정제된 수치를 받는 대신 원시 일봉에서 직접 산출) ── */
+function parseChart(xml) {
+  const closes = [];
+  const re = /data="(\d{8})\|[\d.]+\|[\d.]+\|[\d.]+\|([\d.]+)\|[\d.]*"/g;
+  let m;
+  while ((m = re.exec(xml))) closes.push(parseFloat(m[2]));
+  if (closes.length < 30) return null;
+  const last = closes[closes.length - 1];
+  const ret = n => closes.length > n ? (last / closes[closes.length - 1 - n] - 1) * 100 : null;
+  const yr = closes.slice(-252);
+  return {
+    last,
+    ret1m: ret(21), ret3m: ret(63), ret6m: ret(126), ret1y: ret(252),
+    high52: Math.max(...yr), low52: Math.min(...yr)
+  };
+}
+function applyChart(d, c) {
+  d.momentum = d.momentum || {};
+  d.momentum.ret1m = c.ret1m; d.momentum.ret3m = c.ret3m;
+  d.momentum.ret6m = c.ret6m; d.momentum.ret1y = c.ret1y;
+  if (c.high52) d.momentum.high52 = c.high52;
+  if (c.low52) d.momentum.low52 = c.low52;
+  if (d.company && d.company.price == null) d.company.price = c.last;
+}
+
+/* ── 복붙 모드: 붙여넣은 페이지 텍스트를 동일 파이프라인으로 감정 ── */
+$('pasteLink').addEventListener('click', () => {
+  const pc = $('pasteCard');
+  const show = pc.style.display === 'none';
+  pc.style.display = show ? 'block' : 'none';
+  if (show) pc.scrollIntoView({ behavior: 'smooth' });
+});
+$('btnPaste').addEventListener('click', runPaste);
+async function runPaste() {
+  const text = $('pasteBox').value.trim();
+  if (text.length < 2000) { showErr('붙여넣은 텍스트가 너무 짧습니다. 페이지 전체를 선택(Ctrl+A)·복사해서 붙여넣어 주세요.'); return; }
+  clearErr();
+  $('btnPaste').disabled = true;
+  try {
+    setStep(2, 'active');
+    const raw = await callGemini(extractionPrompt(text.slice(0, MAX_PAGE_CHARS), ''), true);
+    D = parseJsonSafe(raw);
+    D.company = D.company || {}; D.momentum = D.momentum || {};
+    D.annual = D.annual || []; D.consensus = D.consensus || [];
+    CHART = null;
+    setStep(3, 'active');
+    fillVerify(D);
+    $('verify').classList.add('show');
+    recalcAll();
+    setStep(3, 'done');
+    $('result').scrollIntoView({ behavior: 'smooth' });
+    writeAiComment();
+  } catch (e) {
+    showErr(String(e.message || e));
+    document.querySelectorAll('.step.active').forEach(el => el.classList.remove('active'));
+  } finally {
+    $('btnPaste').disabled = false;
+  }
+}
 
 /* ── 메인 플로우 ── */
 $('btnRun').addEventListener('click', run);
@@ -622,26 +690,33 @@ async function run() {
       $('tickerInput').value = r.exact.name;
     }
     setStep(1, 'active');
-    const base = 'https://comp.fnguide.com/SVO2/asp/';
-    const [mainHtml, finHtml] = await Promise.all([
-      fetchPage(base + 'SVD_Main.asp?gicode=A' + code),
-      fetchPage(base + 'SVD_Finance.asp?gicode=A' + code + '&NewMenuID=103')
+    const srcs = await Promise.allSettled([
+      fetchPage('https://finance.naver.com/item/main.naver?code=' + code),                                             // 시세·실적분석(추정 ROE 포함)
+      fetchPage('https://navercomp.wisereport.co.kr/v2/company/c1010001.aspx?cmp_cd=' + code),                          // 주요재무(지배주주지분 등)
+      fetchPage('https://navercomp.wisereport.co.kr/v2/company/cF1001.aspx?cmp_cd=' + code + '&fin_typ=0&freq_typ=Y'),  // 재무제표(F-Score용)
+      fetchPage('https://fchart.stock.naver.com/sise.nhn?symbol=' + code + '&timeframe=day&count=270&requestType=0')    // 일봉(모멘텀 자체 계산)
     ]);
+    if (srcs[0].status !== 'fulfilled') throw (srcs[0].reason || new Error('네이버 종목 페이지 수집 실패'));
+    const mainHtml = srcs[0].value;
     // ── 가드레일 1: 수집된 페이지가 요청한 종목인지 검증 ──
-    if (!mainHtml.includes('A' + code)) {
-      throw new Error('요청한 종목(' + code + ')과 다른 페이지가 수집되어 감정을 중단합니다.\nFnGuide 응답 이상이거나 상장폐지·코드 변경 종목일 수 있습니다.');
+    if (!mainHtml.includes(code)) {
+      throw new Error('요청한 종목(' + code + ')과 다른 페이지가 수집되어 감정을 중단합니다.\n잠시 후 재시도하거나 복붙 모드로 진행하세요.');
     }
-    const mainTxt = condense(mainHtml), finTxt = condense(finHtml);
+    const wiseTxt = srcs[1].status === 'fulfilled' ? condense(srcs[1].value) : '';
+    const finTxt  = srcs[2].status === 'fulfilled' ? condense(srcs[2].value) : '';
+    CHART = srcs[3].status === 'fulfilled' ? parseChart(srcs[3].value) : null;
+    const mainTxt = condense(mainHtml);
     // ── 가드레일 2: 데이터가 비정상적으로 적으면 AI 호출 차단 (환각 방지) ──
-    if (mainTxt.length < 3000) {
-      throw new Error('수집된 데이터가 비정상적으로 적어 감정을 중단합니다. 잠시 후 다시 시도하거나 수기 입력으로 진행하세요.');
+    if (mainTxt.length + wiseTxt.length < 3000) {
+      throw new Error('수집된 데이터가 비정상적으로 적어 감정을 중단합니다. 잠시 후 다시 시도하거나 복붙 모드로 진행하세요.');
     }
     setStep(2, 'active');
-    const raw = await callGemini(extractionPrompt(mainTxt, finTxt), true);
+    const raw = await callGemini(extractionPrompt(mainTxt + '\n\n' + wiseTxt, finTxt), true);
     D = parseJsonSafe(raw);
     D.company = D.company || {}; D.momentum = D.momentum || {};
     D.annual = D.annual || []; D.consensus = D.consensus || [];
     D.company.code = code;
+    if (CHART) applyChart(D, CHART); // 일봉 자체 계산값으로 모멘텀 보강
     setStep(3, 'active');
     fillVerify(D);
     $('verify').classList.add('show');
