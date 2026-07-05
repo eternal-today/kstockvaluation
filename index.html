@@ -536,6 +536,7 @@ function extractionPrompt(mainTxt, finTxt) {
   return [
     '너는 한국 기업 재무데이터 추출기다. 아래는 FnGuide 종목 페이지에서 뽑은 표 텍스트다.',
     '반드시 아래 스키마의 JSON만 출력하라. 설명·주석 금지. 값을 찾을 수 없으면 null.',
+    '절대 규칙: 아래 본문에 없는 값을 너의 기억이나 추정으로 채우지 마라. 본문에 없으면 무조건 null이다.',
     '규칙:',
     '- 금액은 억원 단위 숫자 (쉼표 제거). 비율·수익률·ROE는 % 숫자 (예: 13.4).',
     '- annual: 추정(E) 표기가 없는 "확정" 연간 결산 최근 2개를 과거→최근 순서로.',
@@ -621,14 +622,22 @@ async function run() {
       $('tickerInput').value = r.exact.name;
     }
     setStep(1, 'active');
-    const base = 'https://comp.fnguide.com/SVO2/ASP/';
-    const qs = 'pGB=1&gicode=A' + code + '&cID=&MenuYn=Y&ReportGB=&NewMenuID=';
+    const base = 'https://comp.fnguide.com/SVO2/asp/';
     const [mainHtml, finHtml] = await Promise.all([
-      fetchPage(base + 'SVD_Main.asp?' + qs + '101&stkGb=701'),
-      fetchPage(base + 'SVD_Finance.asp?' + qs + '103&stkGb=701')
+      fetchPage(base + 'SVD_Main.asp?gicode=A' + code),
+      fetchPage(base + 'SVD_Finance.asp?gicode=A' + code + '&NewMenuID=103')
     ]);
+    // ── 가드레일 1: 수집된 페이지가 요청한 종목인지 검증 ──
+    if (!mainHtml.includes('A' + code)) {
+      throw new Error('요청한 종목(' + code + ')과 다른 페이지가 수집되어 감정을 중단합니다.\nFnGuide 응답 이상이거나 상장폐지·코드 변경 종목일 수 있습니다.');
+    }
+    const mainTxt = condense(mainHtml), finTxt = condense(finHtml);
+    // ── 가드레일 2: 데이터가 비정상적으로 적으면 AI 호출 차단 (환각 방지) ──
+    if (mainTxt.length < 3000) {
+      throw new Error('수집된 데이터가 비정상적으로 적어 감정을 중단합니다. 잠시 후 다시 시도하거나 수기 입력으로 진행하세요.');
+    }
     setStep(2, 'active');
-    const raw = await callGemini(extractionPrompt(condense(mainHtml), condense(finHtml)), true);
+    const raw = await callGemini(extractionPrompt(mainTxt, finTxt), true);
     D = parseJsonSafe(raw);
     D.company = D.company || {}; D.momentum = D.momentum || {};
     D.annual = D.annual || []; D.consensus = D.consensus || [];
